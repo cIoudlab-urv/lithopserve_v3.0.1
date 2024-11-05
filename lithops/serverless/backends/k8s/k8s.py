@@ -23,6 +23,8 @@ import copy
 import time
 import yaml
 import urllib3
+import pickle
+
 from kubernetes import client, watch
 from kubernetes.config import load_kube_config, \
     load_incluster_config, list_kube_config_contexts, \
@@ -32,6 +34,7 @@ from kubernetes.client.rest import ApiException
 from lithops import utils
 from lithops.version import __version__
 from lithops.constants import COMPUTE_CLI_MSG, JOBS_PREFIX
+from lithops.job.job_installed_function import job_installed_function
 
 from . import config
 
@@ -113,6 +116,11 @@ class KubernetesBackend:
         """
         Builds a new runtime from a Docker file and pushes it to the registry
         """
+        func_str = pickle.dumps(job_installed_function)
+        func_module_str = pickle.dumps({'func': func_str, 'module_data': {}}, -1)
+        with open('func.pickle', 'wb') as f:
+            f.write(func_module_str)
+
         logger.info(f'Building runtime {docker_image_name} from {dockerfile or "Dockerfile"}')
 
         docker_path = utils.get_docker_path()

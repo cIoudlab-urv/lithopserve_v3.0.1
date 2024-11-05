@@ -23,13 +23,13 @@ import inspect
 import pickle
 import logging
 from types import SimpleNamespace
-
+from lithops.job.job_installed_function import job_installed_function
 from lithops import utils
 from lithops.job.partitioner import create_partitions
-from lithops.storage.utils import create_func_key, create_data_key,\
+from lithops.storage.utils import create_func_key, create_data_key, \
     create_job_key, func_key_suffix
 from lithops.job.serialize import SerializeIndependent, create_module_data
-from lithops.constants import MAX_AGG_DATA_SIZE, LOCALHOST,\
+from lithops.constants import MAX_AGG_DATA_SIZE, LOCALHOST, \
     SERVERLESS, STANDALONE, CUSTOM_RUNTIME_DIR, FAAS_BACKENDS
 
 
@@ -56,7 +56,8 @@ def create_map_job(
     extra_args=None,
     obj_chunk_size=None,
     obj_newline='\n',
-    obj_chunk_number=None
+    obj_chunk_number=None,
+    async_job=True
 ):
     """
     Wrapper to create a map job. It integrates COS logic to process objects.
@@ -83,6 +84,7 @@ def create_map_job(
         internal_storage=internal_storage,
         executor_id=executor_id,
         job_id=job_id,
+        async_job=async_job,
         func=map_function,
         iterdata=map_iterdata,
         chunksize=chunksize,
@@ -163,6 +165,7 @@ def _create_job(
     internal_storage,
     executor_id,
     job_id,
+    async_job,
     func,
     iterdata,
     runtime_meta,
@@ -259,10 +262,9 @@ def _create_job(
 
     # Upload function and data
     upload_function = not config[backend].get("runtime_include_function", False)
-    upload_data = not (
-        (len(str(data_str)) * job.chunksize < MAX_DATA_IN_PAYLOAD for data_str in data_strs)
-        and backend in FAAS_BACKENDS
-    )
+    if not async_job:
+        upload_function = False
+    upload_data = any([(len(data_str) * job.chunksize) > MAX_DATA_IN_PAYLOAD for data_str in data_strs])
 
     # Upload function and modules
     if upload_function:
@@ -293,8 +295,8 @@ def _create_job(
         host_job_meta['host_func_upload_time'] = 0
 
     # upload data
-    if upload_data:
-        # Upload iterdata to COS only if a single element is greater than 8KB
+    if upload_data or backend not in FAAS_BACKENDS:
+        # Upload iterdata to COS only if a single element is greater than MAX_DATA_IN_PAYLOAD
         logger.debug('ExecutorID {} | JobID {} - Uploading data to the storage backend'
                      .format(executor_id, job_id))
         # pass_iteradata through an object storage file
@@ -311,7 +313,7 @@ def _create_job(
         # pass iteradata as part of the invocation payload
         logger.debug('ExecutorID {} | JobID {} - Data per activation is < '
                      '{}. Passing data through invocation payload'
-                     .format(executor_id, job_id, utils.sizeof_fmt(8 * 1024)))
+                     .format(executor_id, job_id, utils.sizeof_fmt(MAX_DATA_IN_PAYLOAD)))
         job.data_key = None
         job.data_byte_ranges = None
         job.data_byte_strs = data_strs
