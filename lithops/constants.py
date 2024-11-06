@@ -65,6 +65,7 @@ SA_IMAGE_NAME_DEFAULT = 'lithops-worker-default'
 SA_DEFAULT_CONFIG_KEYS = {
     'runtime': 'python3',
     'exec_mode': 'reuse',
+    'use_gpu': False,
     'start_timeout': 300,
     'pull_runtime': False,
     'auto_dismantle': True,

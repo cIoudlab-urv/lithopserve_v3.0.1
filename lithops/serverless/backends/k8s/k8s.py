@@ -239,7 +239,56 @@ class KubernetesBackend:
         """
         Deletes a runtime
         """
-        pass
+        job_name_pattern = self._format_job_name(docker_image_name, memory, version)
+
+        docker_path = utils.get_docker_path()
+        docker_user = self.k8s_config.get("docker_user")
+        docker_password = self.k8s_config.get("docker_password")
+        docker_server = self.k8s_config.get("docker_server")
+
+        if docker_user and docker_password:
+            logger.debug('Container registry credentials found in config. Logging in into the registry')
+            cmd = f'{docker_path} login -u {docker_user} --password-stdin {docker_server}'
+            utils.run_command(cmd, input=docker_password)
+
+
+        logger.info(f'Deleting Docker image {docker_image_name} in remote')
+        cmd = f'{docker_path} image rm {docker_image_name}'
+
+        try:
+            utils.run_command(cmd)
+            logger.info(f'Removed Docker image {docker_image_name} in remote')
+        except Exception as e:
+            logger.error(f"Failed to delete image: {docker_image_name} in remote")
+
+        logger.info(f"Deleting runtime: {docker_image_name} locally")
+        cmd = f'{docker_path} rmi {docker_image_name}'
+        try:
+            utils.run_command(cmd)
+            logger.info(f'Removed Docker image {docker_image_name} locally')
+        except Exception as e:
+            logger.error(f"Failed to delete image: {docker_image_name} locally")
+
+        # Delete the Kubernetes Deployment
+        try:
+            logger.debug(f"Deleting job: {job_name_pattern}")
+            self.batch_api.delete_namespaced_job(
+                name=job_name_pattern,
+                namespace=self.namespace,
+                propagation_policy='Background'
+            )
+        except ApiException as e:
+            logger.error(f"Failed to delete job: {job_name_pattern}. Reason: {str(e)}")
+
+        # 2. Delete the container registry secret
+        try:
+            logger.debug("Deleting container registry secret")
+            self.core_api.delete_namespaced_secret("lithops-regcred", self.namespace)
+        except ApiException as e:
+            if e.status != 404:
+                logger.error(f"Failed to delete secret: lithops-regcred. Reason: {str(e)}")
+
+
 
     def clean(self, all=False):
         """
@@ -248,6 +297,7 @@ class KubernetesBackend:
         logger.debug('Cleaning lithops resources in kubernetes')
 
         try:
+            self._delete_workers()
             jobs = self.batch_api.list_namespaced_job(
                 namespace=self.namespace,
                 label_selector=f'user={self.user}'
@@ -325,6 +375,7 @@ class KubernetesBackend:
         master_res['metadata']['namespace'] = self.namespace
         master_res['metadata']['labels']['version'] = 'lithops_v' + __version__
         master_res['metadata']['labels']['user'] = self.user
+        master_res['spec']['template']['spec']['containers'][0]['resources'] = config.MASTER_CONFIG_RESOURCES
 
         container = master_res['spec']['template']['spec']['containers'][0]
         container['image'] = docker_image_name
